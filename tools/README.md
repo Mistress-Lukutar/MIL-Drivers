@@ -15,13 +15,13 @@ a firmware project.
 No need to clone the MIL_Drivers repo. One command from PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/<owner>/MIL_Drivers/main/tools/update_drivers.py | python - init --repo <owner>/MIL_Drivers --ref v2026.07.30
+irm https://raw.githubusercontent.com/Mistress-Lukutar/MIL-Drivers/main/tools/update_drivers.py | python - init --repo Mistress-Lukutar/MIL-Drivers --ref v2026.07.30
 ```
 
 Or on any shell with `curl`:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/<owner>/MIL_Drivers/main/tools/update_drivers.py | python - init --repo <owner>/MIL_Drivers --ref v2026.07.30
+curl -sL https://raw.githubusercontent.com/Mistress-Lukutar/MIL-Drivers/main/tools/update_drivers.py | python - init --repo Mistress-Lukutar/MIL-Drivers --ref v2026.07.30
 ```
 
 The script detects it was piped from stdin, saves itself to
@@ -36,11 +36,11 @@ old in-tree driver copies:
 ```bash
 # Preview what would be done
 python tools/update_drivers.py migrate --dry-run \
-  --repo <owner>/MIL_Drivers --ref v2026.07.30
+  --repo Mistress-Lukutar/MIL-Drivers --ref v2026.07.30
 
 # Apply: removes old Driver/ dir, cleans Keil groups, runs init
 python tools/update_drivers.py migrate \
-  --repo <owner>/MIL_Drivers --ref v2026.07.30
+  --repo Mistress-Lukutar/MIL-Drivers --ref v2026.07.30
 ```
 
 ### After first setup
@@ -64,7 +64,7 @@ Create `drivers.lock` and perform the first module sync.
 
 ```bash
 python tools/update_drivers.py init \
-  --repo <owner>/MIL_Drivers \
+  --repo Mistress-Lukutar/MIL-Drivers \
   --ref main \
   --platform MDR1986BE9x \
   --dest Drivers \
@@ -127,7 +127,7 @@ the given parameters.
 
 ```bash
 python tools/update_drivers.py migrate \
-  --repo <owner>/MIL_Drivers \
+  --repo Mistress-Lukutar/MIL-Drivers \
   --ref v2026.07.30 \
   [--dry-run] [--force]
 ```
@@ -152,7 +152,7 @@ The lock file is a JSON file in the project root:
 ```json
 {
   "version": 1,
-  "repo": "github.com/<owner>/MIL_Drivers",
+  "repo": "github.com/Mistress-Lukutar/MIL-Drivers",
   "ref": "v2026.07.30",
   "platform": "MDR1986BE9x",
   "dest": "Drivers",
@@ -211,4 +211,4 @@ The script does **not** remove old driver groups or files — that is a
 one-time migration step performed manually when switching from in-tree
 drivers.
 
-[repo]: https://github.com/<owner>/MIL_Drivers
+[repo]: https://github.com/Mistress-Lukutar/MIL-Drivers

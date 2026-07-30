@@ -54,13 +54,13 @@ the sync tool [`tools/update_drivers.py`](tools/update_drivers.py).
 **Bootstrap** (one-liner, no clone needed):
 
 ```powershell
-irm https://raw.githubusercontent.com/<owner>/MIL_Drivers/main/tools/update_drivers.py | python - init --repo <owner>/MIL_Drivers --ref v2026.07.30
+irm https://raw.githubusercontent.com/Mistress-Lukutar/MIL-Drivers/main/tools/update_drivers.py | python - init --repo Mistress-Lukutar/MIL-Drivers --ref v2026.07.30
 ```
 
 **Migrate** an existing project with old in-tree `Driver/` copies:
 
 ```bash
-python tools/update_drivers.py migrate --repo <owner>/MIL_Drivers --ref v2026.07.30
+python tools/update_drivers.py migrate --repo Mistress-Lukutar/MIL-Drivers --ref v2026.07.30
 ```
 
 The sync tool downloads this repository at the pinned ref, copies the
