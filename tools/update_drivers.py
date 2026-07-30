@@ -3,7 +3,7 @@ File:   update_drivers.py
 Brief:  Sync MIL driver modules from the MIL_Drivers repository into a project.
 Author: Mistress-Lukutar
 Date:   2026-07-30
-Version: v1.0.0
+Version: v1.1.0
 
 The script downloads a snapshot of the MIL_Drivers GitHub repository at the
 ref pinned in the project's `drivers.lock`, copies the requested modules into
@@ -198,6 +198,7 @@ def fetch_snapshot(
             with urllib.request.urlopen(url, timeout=60) as response:
                 shutil.copyfileobj(response, tmp)
         except (urllib.error.URLError, TimeoutError) as exc:
+            tmp.close()
             tmp_path.unlink(missing_ok=True)
             raise RemoteFetchError(
                 f"Failed to download snapshot '{ref}' of {owner}/{name}: {exc}",
@@ -462,6 +463,145 @@ def find_keil_projects(project_root: Path) -> list[Path]:
     return sorted(project_root.glob("*.uvprojx"))
 
 
+def _remove_keil_groups(
+    uvprojx_path: Path,
+    group_names: list[str],
+) -> bool:
+    '''Remove named groups from every target in a Keil project.
+
+    Args:
+        uvprojx_path: Path to the .uvprojx file.
+        group_names: Group names to remove (e.g. ["Driver/Inc", "Driver/Src"]).
+
+    Returns:
+        True if any group was removed.
+    '''
+    try:
+        tree = ET.parse(uvprojx_path)
+    except ET.ParseError as exc:
+        raise KeilProjectError(f"Cannot parse {uvprojx_path}: {exc}") from exc
+    root = tree.getroot()
+    modified = False
+
+    for target in root.iter("Target"):
+        groups = target.find("Groups")
+        if groups is None:
+            continue
+        for group in list(groups.findall("Group")):
+            if group.findtext("GroupName") in group_names:
+                groups.remove(group)
+                modified = True
+                logger.info(
+                    "Removed group '%s' from target '%s'",
+                    group.findtext("GroupName"),
+                    target.findtext("TargetName", default="?"),
+                )
+
+    if modified:
+        backup = uvprojx_path.with_suffix(uvprojx_path.suffix + ".bak")
+        shutil.copy2(uvprojx_path, backup)
+        ET.indent(tree, space="  ")
+        tree.write(uvprojx_path, encoding="utf-8", xml_declaration=True)
+    return modified
+
+
+def _remove_include_entries(
+    uvprojx_path: Path,
+    prefixes: list[str],
+) -> bool:
+    '''Remove include path entries matching given prefixes from every target.
+
+    Args:
+        uvprojx_path: Path to the .uvprojx file.
+        prefixes: Path prefixes to remove (e.g. [".\\Driver\\Inc"]).
+
+    Returns:
+        True if any entry was removed.
+    '''
+    try:
+        tree = ET.parse(uvprojx_path)
+    except ET.ParseError as exc:
+        raise KeilProjectError(f"Cannot parse {uvprojx_path}: {exc}") from exc
+    root = tree.getroot()
+    modified = False
+
+    for target in root.iter("Target"):
+        include_elem = target.find(
+            "./TargetOption/TargetArmAds/Cads/VariousControls/IncludePath",
+        )
+        if include_elem is None or not include_elem.text:
+            continue
+        entries = [e for e in include_elem.text.split(";") if e]
+        new_entries = [
+            e for e in entries
+            if not any(e.lower().startswith(p.lower()) for p in prefixes)
+        ]
+        if len(new_entries) != len(entries):
+            modified = True
+            logger.info(
+                "Cleaned include paths in target '%s'",
+                target.findtext("TargetName", default="?"),
+            )
+            include_elem.text = ";".join(new_entries)
+
+    if modified:
+        ET.indent(tree, space="  ")
+        tree.write(uvprojx_path, encoding="utf-8", xml_declaration=True)
+    return modified
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    '''Migrate from flat Driver/ layout to per-module Drivers/ layout.
+
+    Detects the old Keil groups ("Driver/Inc", "Driver/Src"), removes them
+    from every .uvprojx target, deletes the old Driver/ directory, and
+    delegates to `cmd_init` with the given parameters.
+
+    Args:
+        args: Parsed CLI arguments (same flags as init, plus
+            --old-driver-dir, --old-groups).
+
+    Returns:
+        Exit code (0 on success).
+    '''
+    project_root = Path(args.project).resolve()
+    old_dir = project_root / args.old_driver_dir
+    if not old_dir.is_dir():
+        logger.info(
+            "Old driver directory '%s' not found, running init directly",
+            args.old_driver_dir,
+        )
+        return cmd_init(args)
+
+    if args.dry_run:
+        removed_files = sorted(p for p in old_dir.rglob("*") if p.is_file())
+        for f in removed_files:
+            print(f"  would delete: {f.relative_to(project_root).as_posix()}")
+        for uvprojx in find_keil_projects(project_root):
+            print(f"  would clean groups in {uvprojx.name}")
+        print("Dry run complete. Re-run without --dry-run to apply.")
+        return 0
+
+    old_groups = [g.strip() for g in args.old_groups.split(",") if g.strip()]
+    old_include_prefixes = [
+        f".\\{args.old_driver_dir}\\Inc",
+        f".\\{args.old_driver_dir}\\Src",
+    ]
+
+    # Clean Keil projects
+    if not args.no_keil:
+        for uvprojx in find_keil_projects(project_root):
+            _remove_keil_groups(uvprojx, old_groups)
+            _remove_include_entries(uvprojx, old_include_prefixes)
+
+    # Remove old driver directory
+    shutil.rmtree(old_dir, ignore_errors=True)
+    logger.info("Removed old driver directory '%s'", args.old_driver_dir)
+
+    # Run init to set up new layout
+    return cmd_init(args)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     '''Create drivers.lock and perform the first sync.'''
     project_root = Path(args.project).resolve()
@@ -583,25 +723,29 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     '''Build the CLI argument parser.'''
-    parser = argparse.ArgumentParser(
-        description="Sync MIL drivers from the MIL_Drivers repository.",
-    )
-    parser.add_argument(
+    # Shared parent so --project and -v work in any position
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
         "--project",
         default=".",
         help="Project root containing drivers.lock (default: cwd)",
     )
-    parser.add_argument(
+    parent.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="Enable debug logging",
+    )
+
+    parser = argparse.ArgumentParser(
+        description="Sync MIL drivers from the MIL_Drivers repository.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init = subparsers.add_parser(
         "init",
         help="Create drivers.lock and perform the first sync",
+        parents=[parent],
     )
     init.add_argument("--repo", required=True,
                       help="Repo specifier, e.g. owner/MIL_Drivers")
@@ -621,6 +765,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync = subparsers.add_parser(
         "sync",
         help="Sync drivers with the pinned snapshot",
+        parents=[parent],
     )
     sync.add_argument("--ref", default="",
                       help="Switch the pinned ref before syncing")
@@ -637,23 +782,104 @@ def build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser(
         "check",
         help="Verify driver files against drivers.lock",
+        parents=[parent],
     )
     check.set_defaults(func=cmd_check)
 
     list_cmd = subparsers.add_parser(
         "list",
         help="List modules available in the snapshot",
+        parents=[parent],
     )
     list_cmd.add_argument("--ref", default="",
                           help="Ref to list instead of the pinned one")
     list_cmd.add_argument("--refresh", action="store_true")
     list_cmd.set_defaults(func=cmd_list)
 
+    migrate = subparsers.add_parser(
+        "migrate",
+        help="Migrate from flat Driver/ to per-module Drivers/ layout",
+        parents=[parent],
+    )
+    migrate.add_argument("--repo", required=True,
+                         help="Repo specifier, e.g. owner/MIL_Drivers")
+    migrate.add_argument("--ref", default="main", help="Git ref to pin")
+    migrate.add_argument("--platform", default=DEFAULT_PLATFORM)
+    migrate.add_argument("--dest", default=DEFAULT_DEST,
+                         help="New driver directory in the project")
+    migrate.add_argument("--modules", default="",
+                         help="Comma-separated module list (default: all)")
+    migrate.add_argument("--old-driver-dir", default="Driver",
+                         help="Old flat driver directory to remove")
+    migrate.add_argument("--old-groups", default="Driver/Inc,Driver/Src",
+                         help="Old Keil group names to remove (comma-sep)")
+    migrate.add_argument("--force", action="store_true")
+    migrate.add_argument("--dry-run", action="store_true",
+                         help="Show what would be done without doing it")
+    migrate.add_argument("--refresh", action="store_true")
+    migrate.add_argument("--no-keil", action="store_true")
+    migrate.set_defaults(func=cmd_migrate)
+
     return parser
+
+
+def _is_piped_or_stdin() -> bool:
+    '''Detect if the script was executed via pipe or with stdin source.'''
+    if not hasattr(sys, "frozen") and getattr(sys, "argv", [""])[0] in (
+        "-",
+        "<stdin>",
+    ):
+        return True
+    # Python may set __file__ to "<stdin>" when reading from pipe
+    try:
+        return Path(__file__).name == "<stdin>"
+    except (TypeError, ValueError):
+        return True
+
+
+def _bootstrap_and_reexec(argv: list[str] | None = None) -> None:
+    '''Bootstrap: save the piped script to tools/update_drivers.py and re-exec.
+
+    When the script is run via a one-liner (e.g. ``irm ... | python -``),
+    it has no file on disk and ``__file__`` is ``<stdin>``. This function
+    saves the in-memory source to the project's ``tools/update_drivers.py``,
+    then re-executes from that path with the same arguments so the script
+    can find itself for self-update later.
+
+    Args:
+        argv: Command-line arguments (defaults to ``sys.argv``).
+    '''
+    argv = argv or sys.argv
+    project_root = Path.cwd()
+
+    # Determine the target script path
+    # Allow --project to override cwd for the target path resolution
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--project", default=".")
+    parser.add_argument("command", nargs="?", default=None)
+    parsed, _ = parser.parse_known_args(argv[1:])
+    project_root = Path(parsed.project).resolve()
+
+    script_dest = project_root / "tools" / "update_drivers.py"
+    script_dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read the piped source from stdin and write it
+    source = sys.stdin.read()
+    script_dest.write_text(source, encoding="utf-8")
+    logger.info("Bootstrapped %s", script_dest)
+
+    # Re-exec from the saved file
+    os.execv(sys.executable, [sys.executable, str(script_dest), *argv[1:]])
 
 
 def main() -> int:
     '''CLI entry point.'''
+    argv = sys.argv
+
+    # Bootstrap: if running from pipe/stdin, save to disk and re-exec
+    if _is_piped_or_stdin():
+        _bootstrap_and_reexec(argv)
+
     parser = build_parser()
     args = parser.parse_args()
     logging.basicConfig(

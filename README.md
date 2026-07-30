@@ -49,29 +49,24 @@ Module versions are tracked per-module in the Doxygen file header
 
 Projects do **not** keep their own copies of these drivers. Instead, each
 project pins a version of this repository in a `drivers.lock` file and runs
-the sync tool [`tools/update_drivers.py`](tools/update_drivers.py), which:
+the sync tool [`tools/update_drivers.py`](tools/update_drivers.py).
 
-1. Downloads this repository at the pinned ref (tag or commit).
-2. Copies the requested modules into the project's `Drivers/` directory.
-3. Verifies file hashes and records them in `drivers.lock`.
-4. Adds the copied files and include paths to a Keil uVision project
-   (`.uvprojx`), if one is found.
-5. Self-updates: the script replaces its own copy in the project so it
-   always matches the pinned drivers.
+**Bootstrap** (one-liner, no clone needed):
 
-```bash
-# First time
-python tools/update_drivers.py init --repo <owner>/MIL_Drivers --ref v2026.07.30
-
-# Update to a newer version
-python tools/update_drivers.py sync --ref v2026.08.15
-
-# CI: verify no local drift
-python tools/update_drivers.py check
+```powershell
+irm https://raw.githubusercontent.com/<owner>/MIL_Drivers/main/tools/update_drivers.py | python - init --repo <owner>/MIL_Drivers --ref v2026.07.30
 ```
 
-See [`tools/README.md`](tools/README.md) for full documentation including
-the [`drivers.lock` format](tools/README.md#driverslock-format).
+**Migrate** an existing project with old in-tree `Driver/` copies:
+
+```bash
+python tools/update_drivers.py migrate --repo <owner>/MIL_Drivers --ref v2026.07.30
+```
+
+The sync tool downloads this repository at the pinned ref, copies the
+requested modules into the project's `Drivers/` directory, registers them
+in a Keil uVision project (`.uvprojx`), self-updates, and records file
+hashes in `drivers.lock`.
 
 ## Code style
 

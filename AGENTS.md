@@ -136,9 +136,15 @@ drivers.
 - The script has **zero third-party dependencies** (stdlib only). Keep it
   that way — it must run in arbitrary project environments with only
   Python 3.9+.
-- Run a smoke test before committing: run `python tools/update_drivers.py
-  --help` and `python tools/update_drivers.py sync --help` from this repo
-  to verify import and parse correctness.
+- Bootstrap mode: the script detects `__file__ == "<stdin>"` (piped via
+  `curl | python -`), saves itself to `tools/update_drivers.py`, and
+  re-executes. Do not break this detection path.
+- Migrate command: removes old flat `Driver/Inc` + `Driver/Src` layout,
+  cleans Keil groups and include paths, then delegates to `init`. Used for
+  one-time migration of legacy projects.
+- Run a smoke test before committing: `python tools/update_drivers.py
+  --help` and `python tools/update_drivers.py migrate --help` from this
+  repo to verify import and parse correctness.
 
 ## Testing
 

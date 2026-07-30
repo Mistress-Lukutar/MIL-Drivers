@@ -10,22 +10,51 @@ a firmware project.
 
 ## Quick start
 
-```bash
-# First time — create drivers.lock and pull the modules
-python tools/update_drivers.py init \
-  --repo <your-github-user>/MIL_Drivers \
-  --ref v2026.07.30
+### New project (bootstrap)
 
-# After that — just sync to the pinned version
+No need to clone the MIL_Drivers repo. One command from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/<owner>/MIL_Drivers/main/tools/update_drivers.py | python - init --repo <owner>/MIL_Drivers --ref v2026.07.30
+```
+
+Or on any shell with `curl`:
+
+```bash
+curl -sL https://raw.githubusercontent.com/<owner>/MIL_Drivers/main/tools/update_drivers.py | python - init --repo <owner>/MIL_Drivers --ref v2026.07.30
+```
+
+The script detects it was piped from stdin, saves itself to
+`tools/update_drivers.py`, and re-executes from disk. After that,
+`python tools/update_drivers.py sync` works as usual.
+
+### Migrating an existing project
+
+If your project has a flat `Driver/Inc/` and `Driver/Src/` layout with
+old in-tree driver copies:
+
+```bash
+# Preview what would be done
+python tools/update_drivers.py migrate --dry-run \
+  --repo <owner>/MIL_Drivers --ref v2026.07.30
+
+# Apply: removes old Driver/ dir, cleans Keil groups, runs init
+python tools/update_drivers.py migrate \
+  --repo <owner>/MIL_Drivers --ref v2026.07.30
+```
+
+### After first setup
+
+```bash
+# Sync to the pinned version
 python tools/update_drivers.py sync
 
 # Pin a newer version and re-sync
 python tools/update_drivers.py sync --ref v2026.08.15
-```
 
-The script copies itself into your project at `tools/update_drivers.py`
-and **self-updates** on every run so it always matches the pinned driver
-snapshot.
+# CI: verify no local drift
+python tools/update_drivers.py check
+```
 
 ## Commands
 
@@ -88,6 +117,33 @@ List all modules available in the snapshot. Pinned modules are marked.
 ```bash
 python tools/update_drivers.py list [--ref <ref>]
 ```
+
+### `migrate`
+
+Migrate from an old flat `Driver/Inc/` + `Driver/Src/` layout to the new
+per-module `Drivers/<Module>/` layout. Removes old Keil groups, cleans old
+include paths, deletes the old `Driver/` directory, and runs `init` with
+the given parameters.
+
+```bash
+python tools/update_drivers.py migrate \
+  --repo <owner>/MIL_Drivers \
+  --ref v2026.07.30 \
+  [--dry-run] [--force]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--repo` | (required) | Repo specifier |
+| `--ref` | `main` | Git ref to pin |
+| `--platform` | `MDR1986BE9x` | Platform directory |
+| `--dest` | `Drivers` | New driver directory |
+| `--modules` | *(all)* | Comma-separated module list |
+| `--old-driver-dir` | `Driver` | Old flat driver directory to remove |
+| `--old-groups` | `Driver/Inc,Driver/Src` | Old Keil group names to remove |
+| `--dry-run` | off | Show what would be done without doing it |
+| `--force` | off | Overwrite locally modified files |
+| `--no-keil` | off | Skip `.uvprojx` modification |
 
 ## drivers.lock format
 
