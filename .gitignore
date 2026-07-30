@@ -1,0 +1,11 @@
+# Documentation output
+docs/
+
+# Python (sync tool)
+__pycache__/
+*.pyc
+
+# OS / editor
+Thumbs.db
+.DS_Store
+*.swp

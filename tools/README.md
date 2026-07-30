@@ -1,0 +1,158 @@
+# update_drivers.py
+
+Synchronize MIL driver modules from the [MIL Drivers][repo] repository into
+a firmware project.
+
+## Requirements
+
+- Python 3.9+ (no third-party dependencies)
+- Internet access (to download the repository snapshot)
+
+## Quick start
+
+```bash
+# First time — create drivers.lock and pull the modules
+python tools/update_drivers.py init \
+  --repo <your-github-user>/MIL_Drivers \
+  --ref v2026.07.30
+
+# After that — just sync to the pinned version
+python tools/update_drivers.py sync
+
+# Pin a newer version and re-sync
+python tools/update_drivers.py sync --ref v2026.08.15
+```
+
+The script copies itself into your project at `tools/update_drivers.py`
+and **self-updates** on every run so it always matches the pinned driver
+snapshot.
+
+## Commands
+
+### `init`
+
+Create `drivers.lock` and perform the first module sync.
+
+```bash
+python tools/update_drivers.py init \
+  --repo <owner>/MIL_Drivers \
+  --ref main \
+  --platform MDR1986BE9x \
+  --dest Drivers \
+  --modules MIL_Time,MIL_GPIO,MIL_Uart
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--repo` | (required) | Repo specifier: `owner/MIL_Drivers`, `github.com/owner/MIL_Drivers`, or full URL |
+| `--ref` | `main` | Git ref to pin (tag, branch, or commit SHA) |
+| `--platform` | `MDR1986BE9x` | Platform directory under `Drivers/` |
+| `--dest` | `Drivers` | Target directory in the project |
+| `--modules` | *(all)* | Comma-separated module list; omit to sync all available modules |
+| `--force` | off | Overwrite locally modified files without prompting |
+| `--refresh` | off | Re-download the snapshot even if cached |
+| `--no-keil` | off | Skip `.uvprojx` modification |
+
+### `sync`
+
+Update driver files to match the pinned snapshot in `drivers.lock`.
+
+```bash
+python tools/update_drivers.py sync [--ref <new-ref>] [--force] [--refresh]
+```
+
+If the snapshot's copy of this script differs from the local one, the script
+replaces itself and re-executes automatically.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--ref` | *(from lock)* | Switch to a different ref before syncing |
+| `--force` | off | Overwrite locally modified files |
+| `--refresh` | off | Re-download the snapshot |
+| `--no-keil` | off | Skip `.uvprojx` modification |
+| `--no-self-update` | off | Do not replace this script from the snapshot |
+
+### `check`
+
+Verify that all driver files on disk match the hashes in `drivers.lock`.
+Exits with code 0 on success, 1 on mismatch. Suitable for CI.
+
+```bash
+python tools/update_drivers.py check
+```
+
+### `list`
+
+List all modules available in the snapshot. Pinned modules are marked.
+
+```bash
+python tools/update_drivers.py list [--ref <ref>]
+```
+
+## drivers.lock format
+
+The lock file is a JSON file in the project root:
+
+```json
+{
+  "version": 1,
+  "repo": "github.com/<owner>/MIL_Drivers",
+  "ref": "v2026.07.30",
+  "platform": "MDR1986BE9x",
+  "dest": "Drivers",
+  "modules": [
+    "MIL_Time",
+    "MIL_GPIO",
+    "MIL_Uart"
+  ],
+  "files": {
+    "Drivers/MIL_Time/MIL_Time.c": "<sha256>",
+    "Drivers/MIL_Time/MIL_Time.h": "<sha256>",
+    "Drivers/MIL_GPIO/MIL_GPIO.c": "<sha256>",
+    "Drivers/MIL_GPIO/MIL_GPIO.h": "<sha256>"
+  },
+  "script_sha256": "<sha256>",
+  "synced_at": "2026-07-30T12:00:00"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `version` | Lock format schema version |
+| `repo` | Normalized repo specifier (`owner/name`) |
+| `ref` | Pinned git ref |
+| `platform` | Platform directory in the MIL Drivers repo |
+| `dest` | Driver directory relative to the project root |
+| `modules` | Modules to sync |
+| `files` | Map of project-relative paths to SHA-256 hashes |
+| `script_sha256` | Hash of `tools/update_drivers.py` at sync time |
+| `synced_at` | ISO 8601 timestamp of last sync |
+
+## How it works
+
+1. Reads `drivers.lock` to find the pinned repo, ref, and module list.
+2. Downloads a `.tar.gz` snapshot from `codeload.github.com` and caches it
+   in `.drivers-cache/` inside the project (gitignored).
+3. Self-updates: replaces the project copy of this script with the one from
+   the snapshot and re-executes.
+4. Copies each module's `.c` and `.h` files into `<dest>/<module>/`.
+5. Detects locally modified files and refuses to overwrite them unless
+   `--force` is passed.
+6. If a `.uvprojx` file is found, adds the driver files to a **Drivers**
+   group in every build target and appends include paths.
+7. Rewrites `drivers.lock` with updated hashes.
+
+## Keil uVision integration
+
+The script modifies `.uvprojx` files automatically:
+
+- Creates a **Drivers** group in each build target if it does not exist.
+- Adds each `.c` file (FileType 1) and `.h` file (FileType 5) to the group.
+- Appends `.\Drivers\<Module>` to the C compiler include path of each target.
+- Writes a `.bak` backup before saving.
+
+The script does **not** remove old driver groups or files — that is a
+one-time migration step performed manually when switching from in-tree
+drivers.
+
+[repo]: https://github.com/<owner>/MIL_Drivers
