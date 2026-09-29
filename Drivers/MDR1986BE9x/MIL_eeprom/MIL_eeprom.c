@@ -2,8 +2,8 @@
  * @file MIL_eeprom.c
  * @brief Flash/EEPROM memory controller library for Milandr 1986VE91T
  * @author Mistress-Lukutar
- * @date 2026-07-29
- * @version v1.2.2
+ * @date 2026-09-29
+ * @version v1.2.3
  *
  * Implementation of Flash memory operations following the timing diagrams
  * and specifications from Milandr datasheet ТСКЯ.431296.001СП.
@@ -24,6 +24,8 @@
 #define EEPROM_PAGE_ADDR_MASK 0x0001F000UL  /**< Page address bits */
 #define EEPROM_PAGE_ADDR_SHIFT 12UL         /**< Page address shift */
 #define EEPROM_GUARD_US 1UL                 /**< 1us guard covering the txa/tpgh sub-us minimums (30/20ns) */
+#define EEPROM_READ_SETTLE_US 50UL          /**< Flash read-path settle after CON drops (empirical, not a datasheet value) */
+#define EEPROM_RESYNC_READS 4UL             /**< Dummy flash reads that walk the read FSM before flash code executes again */
 /** @} */
 
 /* ============================================================================
@@ -31,8 +33,8 @@
  * ============================================================================
  */
 
-static void _delayUs(uint32_t us);
-static void _delayMs(uint32_t ms);
+__RAMFUNC static void _delayUs(uint32_t us);
+__RAMFUNC static void _delayMs(uint32_t ms);
 __RAMFUNC static void _enterProgrammingMode(void);
 __RAMFUNC static void _exitProgrammingMode(void);
 __RAMFUNC
@@ -49,8 +51,9 @@ static void _eraseSector(uint32_t address, uint32_t sector, MIL_EEPROM_MemType m
  * @note Polls the free-running SysTick down-counter.
  * @note Falls back to a conservative NOP loop if SysTick is not running yet
  *       (early boot); the fallback may over-delay but never under-delays.
+ * @note RAM-resident: runs with CON=1 while flash is not readable.
  */
-static void _delayUs(uint32_t us) {
+__RAMFUNC static void _delayUs(uint32_t us) {
   if (SysTick->CTRL & SysTick_CTRL_ENABLE_Msk) {
     const uint32_t target_cycles = us * SYSTEM_CORE_CLOCK_MHZ;
     const uint32_t reload        = SysTick->LOAD + 1U;
@@ -81,7 +84,7 @@ static void _delayUs(uint32_t us) {
  * @brief Busy-wait delay in milliseconds
  * @param ms Delay time in milliseconds
  */
-static void _delayMs(uint32_t ms) {
+__RAMFUNC static void _delayMs(uint32_t ms) {
   while (ms--) {
     _delayUs(1000);
   }
@@ -97,6 +100,10 @@ static void _delayMs(uint32_t ms) {
  * @note Must be called from RAM when performing flash operations
  */
 __RAMFUNC static void _enterProgrammingMode(void) {
+  /* Retire in-flight flash accesses before the array goes away */
+  __DSB();
+  __ISB();
+
   /* Write unlock key */
   MDR_EEPROM->KEY = EEPROM_KEY;
 
@@ -121,6 +128,21 @@ __RAMFUNC static void _exitProgrammingMode(void) {
 
   /* Clear the key */
   MDR_EEPROM->KEY = 0;
+
+  /* The flash read path stays desynchronized for a while after CON drops
+   * and serves stale-line data to instruction fetches (seen as garbage
+   * execution). Settle, then walk the read FSM with dummy line reads
+   * before any flash-resident code runs again. */
+  _delayUs(EEPROM_READ_SETTLE_US);
+  {
+    volatile uint32_t* resync = (volatile uint32_t*)0x08000000UL; /* 32 bytes apart: distinct flash lines */
+    uint32_t n;
+    for (n = 0U; n < EEPROM_RESYNC_READS; n++) {
+      (void)*resync;
+      __DSB();
+      resync += 8U;
+    }
+  }
 }
 
 /**
@@ -135,6 +157,9 @@ __RAMFUNC static void _eraseSector(uint32_t address, uint32_t sector, MIL_EEPROM
 
   /* Set address with sector bits */
   MDR_EEPROM->ADR = (address & ~EEPROM_SECTOR_MASK) | sector;
+
+  /* Clear data input, as the vendor SPL does before every erase pulse */
+  MDR_EEPROM->DI = 0;
 
   /* Configure memory type */
   if (memType == EEPROM_INFO_MEMORY) {
@@ -319,6 +344,9 @@ __RAMFUNC uint32_t MIL_EEPROM_ReadWordProg(uint32_t address, MIL_EEPROM_MemType 
   /* Clear control bits */
   MDR_EEPROM->CMD &= ~(EEPROM_CMD_XE | EEPROM_CMD_YE | EEPROM_CMD_SE);
 
+  /* Read recovery time before leaving programming mode */
+  _delayUs(EEPROM_TIME_TRCV_US);
+
   _exitProgrammingMode();
 
   if (!primask) {
@@ -360,26 +388,30 @@ __RAMFUNC MIL_EEPROM_Status MIL_EEPROM_ReadBuffer(uint32_t address, uint32_t* bu
     cmd |= EEPROM_CMD_IFREN;
   }
 
-  /* Set XE, YE, SE bits for read operation */
-  cmd |= (EEPROM_CMD_XE | EEPROM_CMD_YE | EEPROM_CMD_SE);
-  MDR_EEPROM->CMD = cmd;
-  /* Commit before timing the per-word access guard */
-  __DSB();
-
-  /* Read words sequentially */
+  /* One full command pulse per word (the Milandr SPL EEPROM_ReadWord
+   * pattern): ADR must only change while XE/YE/SE are low. */
   for (i = 0; i < wordCount; i++) {
-    /* Set address */
+    /* Set address with the command bits quiescent */
     MDR_EEPROM->ADR = address + (i * 4);
 
-    /* Wait for data to be valid */
-    _delayUs(EEPROM_GUARD_US);
+    /* Strobe the read command */
+    MDR_EEPROM->CMD = cmd | EEPROM_CMD_XE | EEPROM_CMD_YE | EEPROM_CMD_SE;
+    __DSB();
+
+    /* Idle DO reads for address-to-data settling, as in the vendor SPL */
+    (void)MDR_EEPROM->DO;
+    (void)MDR_EEPROM->DO;
+    (void)MDR_EEPROM->DO;
 
     /* Read data */
     buffer[i] = MDR_EEPROM->DO;
+
+    /* Drop the command before the next address change */
+    MDR_EEPROM->CMD = cmd;
   }
 
-  /* Clear control bits */
-  MDR_EEPROM->CMD &= ~(EEPROM_CMD_XE | EEPROM_CMD_YE | EEPROM_CMD_SE);
+  /* Read recovery time before leaving programming mode */
+  _delayUs(EEPROM_TIME_TRCV_US);
 
   _exitProgrammingMode();
 
