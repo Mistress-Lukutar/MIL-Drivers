@@ -3,7 +3,7 @@
  * @brief Flash/EEPROM memory controller library for Milandr 1986VE91T
  * @author Mistress-Lukutar
  * @date 2026-09-29
- * @version v1.2.3
+ * @version v1.2.4
  *
  * Implementation of Flash memory operations following the timing diagrams
  * and specifications from Milandr datasheet ТСКЯ.431296.001СП.
@@ -25,7 +25,7 @@
 #define EEPROM_PAGE_ADDR_SHIFT 12UL         /**< Page address shift */
 #define EEPROM_GUARD_US 1UL                 /**< 1us guard covering the txa/tpgh sub-us minimums (30/20ns) */
 #define EEPROM_READ_SETTLE_US 50UL          /**< Flash read-path settle after CON drops (empirical, not a datasheet value) */
-#define EEPROM_RESYNC_READS 4UL             /**< Dummy flash reads that walk the read FSM before flash code executes again */
+#define EEPROM_RESYNC_READS 16UL            /**< Dummy flash reads that walk the read FSM before flash code executes again */
 /** @} */
 
 /* ============================================================================
@@ -143,6 +143,13 @@ __RAMFUNC static void _exitProgrammingMode(void) {
       resync += 8U;
     }
   }
+
+  /* Final settle after the last dummy read: ending the exit path right
+   * after the resync loop let the very next instruction fetch - the
+   * perpetually pending 153 kHz PWM vector fetch - catch the read FSM
+   * mid-recovery and enter garbage code (undefined-instruction HardFault
+   * with a mid-instruction PC inside the target ISR). */
+  _delayUs(EEPROM_READ_SETTLE_US);
 }
 
 /**

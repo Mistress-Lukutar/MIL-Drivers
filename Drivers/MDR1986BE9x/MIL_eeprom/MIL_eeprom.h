@@ -3,7 +3,7 @@
  * @brief Flash/EEPROM memory controller library for Milandr 1986VE91T
  * @author Mistress-Lukutar
  * @date 2026-09-29
- * @version v1.2.3
+ * @version v1.2.4
  *
  * This library provides functions for reading, writing, and erasing
  * the internal Flash memory (main and information blocks) on Milandr
