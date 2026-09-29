@@ -6,8 +6,8 @@
  * Provides blocking and interrupt-based transmission/reception.
  *
  * @author Mistress-Lukutar
- * @date   2026-07-30
- * @version v2.1.0
+ * @date   2026-09-29
+ * @version v2.1.1
  */
 
 #ifndef MIL_UART_H

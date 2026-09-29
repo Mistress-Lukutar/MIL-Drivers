@@ -7,13 +7,22 @@
  * interrupt-based transmission/reception.
  *
  * @author Mistress-Lukutar
- * @date   2026-07-30
- * @version v2.1.0
+ * @date   2026-09-29
+ * @version v2.1.1
  */
 
 #include "MIL_Uart.h"
 #include "MIL_Time.h"
 #include <string.h>
+
+/* ======================== Private Constants ======================== */
+
+/**
+ * Upper bound of the FR.BUSY drain spin in the TX-complete IRQ, in loop
+ * iterations. One byte at 4800 baud drains in ~30k iterations at 80 MHz;
+ * the guard only trips when the transmitter itself locks up.
+ */
+#define MIL_UART_TX_DRAIN_GUARD 100000U
 
 /* ======================== Private Variables ======================== */
 
@@ -196,10 +205,13 @@ MIL_UART_ErrorTypeDef MIL_UART_InitIT(MIL_UART_HandleTypeDef* uart) {
 
   /* Clear any latched interrupt flags BEFORE unmasking them, so a flag that
    * fired between the two writes cannot trigger a spurious IRQ. ICR is
-   * write-1-to-clear, so write the mask directly (not a read-modify-write). */
+   * write-1-to-clear, so write the mask directly (not a read-modify-write).
+   * RX only: TXRIS stays asserted while the transmitter idles, so a
+   * permanently armed TXIM would spin the handler forever. SendIT arms
+   * TXIM around an active transfer and the TX-complete IRQ disarms it. */
   uart->instance->ICR = UART_ICR_TXIC | UART_ICR_RXIC;
   __DSB();
-  uart->instance->IMSC = UART_IMSC_TXIM | UART_IMSC_RXIM;
+  uart->instance->IMSC = UART_IMSC_RXIM;
 
   /* Enable UART interrupt in NVIC. Drain the write buffer first so IMSC is
    * committed before the NVIC line goes live. */
@@ -279,16 +291,24 @@ MIL_UART_ErrorTypeDef MIL_UART_SendIT(MIL_UART_HandleTypeDef* uart, const uint8_
     uart->txHead                 = nextHead;
   }
 
-  /* Start transmission if not already in progress */
+  /* Start transmission if not already in progress. Atomic against the UART
+   * IRQ: with TXRIS pending from idle, a concurrent TX-complete handler could
+   * feed DR as well and push a duplicate of the first byte. */
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
   if (uart->status == MIL_UART_READY) {
     uart->status = MIL_UART_BUSY;
     if (uart->mode == MIL_UART_MODE_HALF_DUPLEX) {
       _switchDirection(uart, MIL_UART_DIRECTION_TX);
     }
 
-    /* Trigger first byte transmission */
+    /* Trigger first byte transmission, then arm the TX interrupt */
     uart->instance->DR = uart->txBuffer[uart->txTail];
     uart->txTail       = (uart->txTail + 1) % UART_TX_BUFFER_SIZE;
+    uart->instance->IMSC |= UART_IMSC_TXIM;
+  }
+  if (!primask) {
+    __enable_irq();
   }
 
   return MIL_UART_OK;
@@ -376,11 +396,18 @@ void MIL_UART_IRQHandler(MIL_UART_HandleTypeDef* uart) {
       uart->instance->DR = uart->txBuffer[uart->txTail];
       uart->txTail       = (uart->txTail + 1) % UART_TX_BUFFER_SIZE;
     } else {
-      /* Transmission complete */
-      uart->status = MIL_UART_READY;
+      /* Ring drained, but TXRIS only reports the holding register empty:
+       * the last byte is still leaving the shift register. In half-duplex
+       * the direction may flip only after FR.BUSY clears, or that final
+       * byte is cut off mid-transmission on the wire. */
       if (uart->mode == MIL_UART_MODE_HALF_DUPLEX) {
+        uint32_t guard = MIL_UART_TX_DRAIN_GUARD;
+        while ((uart->instance->FR & UART_FR_BUSY) && (guard-- > 0U)) { }
         _switchDirection(uart, MIL_UART_DIRECTION_RX);
       }
+      /* Disarm TX until the next SendIT; TXRIS stays asserted while idle */
+      uart->instance->IMSC &= ~UART_IMSC_TXIM;
+      uart->status = MIL_UART_READY;
     }
   }
 

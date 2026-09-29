@@ -38,7 +38,7 @@ Drivers/
 | `MIL_SPI` | v1.0.0 | SPI master |
 | `MIL_TIMx` | v1.0.0 | General-purpose timer configuration |
 | `MIL_Time` | v1.1.1 | SysTick-based timebase: `millis`, `micros`, blocking delays, configurable core clock |
-| `MIL_Uart` | v2.1.0 | UART1/UART2 driver, half- and full-duplex, blocking and interrupt-driven TX/RX with ring buffers |
+| `MIL_Uart` | v2.1.1 | UART1/UART2 driver, half- and full-duplex, blocking and interrupt-driven TX/RX with ring buffers |
 | `MIL_eeprom` | v1.2.3 | Internal Flash/EEPROM read/write/erase with timing-safe programming sequences |
 
 Each module is self-contained in its own directory as a `.c` / `.h` pair.
